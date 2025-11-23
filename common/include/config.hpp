@@ -44,6 +44,11 @@ namespace render {
 
     [[nodiscard]] vector get_background_light_color() const { return background_light_color; }
 
+    // Getters para TBB
+    [[nodiscard]] int get_num_threads() const { return num_threads; }
+    [[nodiscard]] int get_grain_size() const { return grain_size; }
+    [[nodiscard]] std::string get_partitioner() const { return partitioner; }
+
     // Setters con validación
     void set_aspect_ratio(int width, int height);
     void set_image_width(int width);
@@ -56,6 +61,9 @@ namespace render {
     void set_max_depth(int depth);
     void set_material_rng_seed(std::uint64_t seed);
     void set_ray_rng_seed(std::uint64_t seed);
+    void set_num_threads(int n);
+    void set_grain_size(int s);
+    void set_partitioner(std::string const & p);
     void set_background_dark_color(vector const & color);
     void set_background_light_color(vector const & color);
 
@@ -79,6 +87,11 @@ namespace render {
     // Semillas para generación de números aleatorios
     std::uint64_t material_rng_seed{13};
     std::uint64_t ray_rng_seed{19};
+
+    // Threads
+    int num_threads{-1};
+    int grain_size{1};
+    std::string partitioner{"auto"};
 
     // Colores de fondo para el gradiente
     vector background_dark_color{0.25, 0.5, 1.0};

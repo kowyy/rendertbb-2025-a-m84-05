@@ -2,6 +2,7 @@
 #include "camera.hpp"
 #include "color.hpp"
 #include "config.hpp"
+#include "image_soa.hpp" 
 #include "object.hpp"
 #include "ray.hpp"
 #include "scene.hpp"
@@ -12,35 +13,36 @@
 #include <tbb/blocked_range.h>
 #include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
+#include <tbb/global_control.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
-#include <fstream>
-#include <gsl/gsl>
+#include <exception>
+#include <gsl/span>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <random>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace {
 
-struct ThreadLocalRNGs {
-    std::mt19937_64 * ray;
-    std::mt19937_64 * material;
-};
+  struct ThreadLocalRNGs {
+      std::mt19937_64 * ray;
+      std::mt19937_64 * material;
+  };
 
-struct RenderJob {
+  struct RenderJob {
     render::config cfg;
     render::scene scene_data;
     render::camera cam;
+    ImageSOA image;
     std::string output_path;
 
-    // Semillas y almacenamiento TLS
     std::vector<std::uint64_t> ray_seeds;
     std::vector<std::uint64_t> material_seeds;
     tbb::enumerable_thread_specific<std::mt19937_64> ray_rngs;
@@ -48,218 +50,188 @@ struct RenderJob {
 
     RenderJob(std::string const & config_path, std::string const & scene_path,
               std::string output_path_p)
-    : cam{cfg}, output_path{std::move(output_path_p)} {
-
-        render::load_config(config_path, cfg);
-        render::parse_scene_file(scene_path, scene_data);
-        cam = render::camera{cfg};
-
-        // Inicialización de semillas
-        size_t const num_seeds = 256;
-        ray_seeds.resize(num_seeds);
-        material_seeds.resize(num_seeds);
-
-        std::mt19937_64 master_ray_gen{
-            static_cast<std::mt19937_64::result_type>(cfg.get_ray_rng_seed())};
-        std::ranges::generate(ray_seeds, master_ray_gen);
-
-        std::mt19937_64 master_mat_gen{
-            static_cast<std::mt19937_64::result_type>(cfg.get_material_rng_seed())};
-        std::ranges::generate(material_seeds, master_mat_gen);
-
-        // Inicialización TLS
-        ray_rngs = tbb::enumerable_thread_specific<std::mt19937_64>{[this] {
-            static std::atomic<size_t> counter{0};
-            size_t const idx = counter++ % this->ray_seeds.size();
-            return std::mt19937_64{this->ray_seeds[idx]};
-        }};
-
-        material_rngs = tbb::enumerable_thread_specific<std::mt19937_64>{[this] {
-            static std::atomic<size_t> counter{0};
-            size_t const idx = counter++ % this->material_seeds.size();
-            return std::mt19937_64{this->material_seeds[idx]};
-        }};
+        : cam{cfg}, image{1, 1}, output_path(std::move(output_path_p)) {
+      
+      load_resources(config_path, scene_path);
+      init_rngs();
     }
-};
 
-struct PixelRenderParams {
+  private:
+    void load_resources(std::string const & config_path, std::string const & scene_path) {
+      render::load_config(config_path, cfg);
+      render::parse_scene_file(scene_path, scene_data);
+
+      int const image_width = cfg.get_image_width();
+      auto const aspect_ratio =
+          static_cast<double>(cfg.get_aspect_width()) / cfg.get_aspect_height();
+      int const image_height = static_cast<int>(image_width / aspect_ratio);
+
+      cam = render::camera{cfg};
+      image = ImageSOA{image_width, image_height};
+    }
+
+    void init_rngs() {
+      size_t const num_seeds = 256; 
+      ray_seeds.resize(num_seeds);
+      material_seeds.resize(num_seeds);
+
+      std::mt19937_64 master_ray_gen{
+          static_cast<std::mt19937_64::result_type>(cfg.get_ray_rng_seed())};
+      std::ranges::generate(ray_seeds, master_ray_gen);
+
+      std::mt19937_64 master_mat_gen{
+          static_cast<std::mt19937_64::result_type>(cfg.get_material_rng_seed())};
+      std::ranges::generate(material_seeds, master_mat_gen);
+
+      ray_rngs = tbb::enumerable_thread_specific<std::mt19937_64>{[this] {
+          static std::atomic<size_t> counter{0};
+          size_t const idx = counter++ % this->ray_seeds.size();
+          return std::mt19937_64{this->ray_seeds[idx]};
+      }};
+
+      material_rngs = tbb::enumerable_thread_specific<std::mt19937_64>{[this] {
+          static std::atomic<size_t> counter{0};
+          size_t const idx = counter++ % this->material_seeds.size();
+          return std::mt19937_64{this->material_seeds[idx]};
+      }};
+    }
+  };
+
+  // Calcula color de un rayo recursivamente
+  render::color ray_color(render::ray const & r, RenderJob const & job, int depth,
+                          std::mt19937_64 & mat_rng) {
+    if (depth <= 0) {
+      return render::color{0.0, 0.0, 0.0};
+    }
+
+    render::hit_record rec;
+    constexpr double min_t = 1e-3;
+
+    if (job.scene_data.hit(r, min_t, std::numeric_limits<double>::infinity(), rec)) {
+      render::ray scattered;
+      if (rec.mat_ptr != nullptr) {
+        auto const result = rec.mat_ptr->scatter(r, rec, scattered, mat_rng);
+        if (result.scattered) {
+          return render::color{result.attenuation} * ray_color(scattered, job, depth - 1, mat_rng);
+        }
+      }
+      return render::color{0.0, 0.0, 0.0};
+    }
+
+    render::vector const unit_direction = r.get_direction().normalized();
+    auto const t = 0.5 * (unit_direction.y + 1.0);
+    return render::color{(1.0 - t) * job.cfg.get_background_light_color() +
+                         t * job.cfg.get_background_dark_color()};
+  }
+
+  class RenderTask {
+    RenderJob * job;
     int image_width;
     int image_height;
     int samples_per_pixel;
     int max_depth;
-};
-
-struct ImageSaveParams {
-    int width;
-    int height;
     double gamma;
-};
 
-class PixelRenderer {
-public:
-    PixelRenderer(RenderJob const * j, PixelRenderParams const * p)
-    : job(j), params(p) {}
+  public:
+    explicit RenderTask(RenderJob * j)
+      : job(j),
+        image_width(j->image.get_width()),
+        image_height(j->image.get_height()),
+        samples_per_pixel(j->cfg.get_samples_per_pixel()),
+        max_depth(j->cfg.get_max_depth()),
+        gamma(j->cfg.get_gamma()) {}
 
-    // Renderiza un píxel completo
-    render::color render_pixel(int i, int j, ThreadLocalRNGs & rngs) const {
-        render::color accumulated{0.0, 0.0, 0.0};
-        std::uniform_real_distribution<double> dist(-0.5, 0.5);
+    void operator()(tbb::blocked_range<int> const & r) const {
+      ThreadLocalRNGs local_rngs{
+          &job->ray_rngs.local(),
+          &job->material_rngs.local()
+      };
+      
+      std::uniform_real_distribution<double> dist(-0.5, 0.5);
 
-        for (int s = 0; s < params->samples_per_pixel; ++s) {
-            accumulated += compute_sample_color(i, j, rngs, dist);
+      for (int j = r.begin(); j != r.end(); ++j) {
+        for (int i = 0; i < image_width; ++i) {
+          render::color accumulated{0.0, 0.0, 0.0};
+
+          for (int s = 0; s < samples_per_pixel; ++s) {
+            auto const u = (static_cast<double>(i) + 0.5 + dist(*local_rngs.ray)) / image_width;
+            auto const v = (static_cast<double>(j) + 0.5 + dist(*local_rngs.ray)) / image_height;
+
+            render::ray const ray_sample = job->cam.get_ray(u, v);
+            accumulated += ray_color(ray_sample, *job, max_depth, *local_rngs.material);
+          }
+
+          render::color const pixel_color = accumulated / static_cast<double>(samples_per_pixel);
+          job->image.set_pixel(i, j, pixel_color, gamma);
         }
-        return accumulated / static_cast<double>(params->samples_per_pixel);
+      }
     }
+  };
 
-private:
-    RenderJob const * job;
-    PixelRenderParams const * params;
-
-    // Calcula el color de un rayo
-    render::color
-    compute_sample_color(int i, int j, ThreadLocalRNGs & rngs,
-                         std::uniform_real_distribution<double> & dist) const {
-        auto const u =
-            (static_cast<double>(i) + 0.5 + dist(*rngs.ray)) / params->image_width;
-        auto const v =
-            (static_cast<double>(j) + 0.5 + dist(*rngs.ray)) / params->image_height;
-
-        render::ray const ray_sample = job->cam.get_ray(u, v);
-        return trace_ray(ray_sample, params->max_depth, *rngs.material);
+  // Función auxiliar para configurar TBB
+  std::unique_ptr<tbb::global_control> setup_tbb(render::config const & cfg) {
+    int const n_threads = cfg.get_num_threads();
+    if (n_threads > 0) {
+      std::cout << "Configuración TBB: Limitando a " << n_threads << " hilos.\n";
+      return std::make_unique<tbb::global_control>(
+          tbb::global_control::max_allowed_parallelism,
+          static_cast<size_t>(n_threads)
+      );
     }
+    std::cout << "Configuración TBB: Automático (todos los núcleos).\n";
+    return nullptr;
+  }
 
-    // Función recursiva de trazado de rayos
-    render::color trace_ray(render::ray const & r, int depth,
-                            std::mt19937_64 & mat_rng) const {
-        if (depth <= 0) {
-            return render::color{0.0, 0.0, 0.0};
-        }
+  void render_loop(RenderJob & job) {
+    auto global_limit = setup_tbb(job.cfg);
 
-        render::hit_record rec;
-        constexpr double min_t = 1e-3;
+    int const width = job.image.get_width();
+    int const height = job.image.get_height();
 
-        if (job->scene_data.hit(r, min_t, std::numeric_limits<double>::infinity(),
-                                rec)) {
-            render::ray scattered;
-            if (rec.mat_ptr != nullptr) {
-                auto const result = rec.mat_ptr->scatter(r, rec, scattered, mat_rng);
-                if (result.scattered) {
-                    return render::color{result.attenuation} *
-                    trace_ray(scattered, depth - 1, mat_rng);
-                }
-            }
-            return render::color{0.0, 0.0, 0.0};
-        }
+    std::cout << "Renderizando escena (" << width << "x" << height 
+              << ") con TBB...\n";
 
-        render::vector const unit_direction = r.get_direction().normalized();
-        auto const t                        = 0.5 * (unit_direction.y + 1.0);
-        return render::color{(1.0 - t) * job->cfg.get_background_light_color() +
-            t * job->cfg.get_background_dark_color()};
+    RenderTask task(&job); // Pasamos la dirección de memoria (&job)
+    
+    std::string const part_type = job.cfg.get_partitioner();
+    int const grain = job.cfg.get_grain_size();
+    tbb::blocked_range<int> const range(0, height, static_cast<size_t>(grain));
+
+    if (part_type == "static") {
+      tbb::parallel_for(range, task, tbb::static_partitioner());
+    } else if (part_type == "simple") {
+      tbb::parallel_for(range, task, tbb::simple_partitioner());
+    } else {
+      tbb::parallel_for(range, task, tbb::auto_partitioner());
     }
-};
-
-void save_ppm(std::string const & filename,
-              std::vector<render::color> const & image,
-              ImageSaveParams const & params) {
-    std::ofstream out(filename);
-    if (!out.is_open()) {
-        throw std::runtime_error("Error: Cannot open file for writing: " + filename);
-    }
-
-    out << "P3\n" << params.width << " " << params.height << "\n255\n";
-
-    for (int j = 0; j < params.height; ++j) {
-        for (int i = 0; i < params.width; ++i) {
-            size_t const index = static_cast<size_t>(j) *
-                static_cast<size_t>(params.width) +
-                static_cast<size_t>(i);
-            render::color const & pixel = image[index];
-
-            out << static_cast<int>(pixel.to_discrete_r(params.gamma)) << " "
-                << static_cast<int>(pixel.to_discrete_g(params.gamma)) << " "
-                << static_cast<int>(pixel.to_discrete_b(params.gamma)) << "\n";
-        }
-    }
-}
-
-void execute_parallel_render(RenderJob & job,
-                             PixelRenderParams const & render_params,
-                             std::vector<render::color> & image) {
-    PixelRenderer const renderer(&job, &render_params);
-
-    int const image_height = render_params.image_height;
-    int const image_width  = render_params.image_width;
-
-    tbb::parallel_for(
-        tbb::blocked_range<int>(0, image_height),
-        [&](tbb::blocked_range<int> const & r) {
-            // Punteros a los generadores locales
-            ThreadLocalRNGs local_rngs{&job.ray_rngs.local(),
-                &job.material_rngs.local()};
-
-            for (int j = r.begin(); j != r.end(); ++j) {
-                for (int i = 0; i < image_width; ++i) {
-                    render::color const pixel_color =
-                        renderer.render_pixel(i, j, local_rngs);
-
-                    size_t const index = static_cast<size_t>(j) *
-                        static_cast<size_t>(image_width) +
-                        static_cast<size_t>(i);
-                    image[index] = pixel_color;
-                }
-            }
-        tbb::auto_partitioner();
-        });
-}
-
-void render_loop(RenderJob & job) {
-    int const image_width = job.cfg.get_image_width();
-    auto const aspect_ratio = static_cast<double>(job.cfg.get_aspect_width()) /
-        job.cfg.get_aspect_height();
-    int const image_height = static_cast<int>(image_width / aspect_ratio);
-
-    PixelRenderParams const render_params{image_width, image_height,
-        job.cfg.get_samples_per_pixel(),
-        job.cfg.get_max_depth()};
-
-    ImageSaveParams const save_params{image_width, image_height,
-        job.cfg.get_gamma()};
-
-    std::vector<render::color> image(static_cast<size_t>(image_width) *
-                                     static_cast<size_t>(image_height));
-
-    std::cout << "Renderizando escena (" << image_width << "x" << image_height
-        << ") con TBB...\n";
-
-    execute_parallel_render(job, render_params, image);
 
     std::cout << "Renderizado completado.\n";
-    save_ppm(job.output_path, image, save_params);
-    std::cout << "Imagen guardada como " << job.output_path << "\n";
-}
+  }
 
 } // namespace
 
-int render::Application::run(gsl::span<char const *const> args) {
-    if (args.size() != 4) {
-        std::cerr << "Error: Invalid number of arguments: " << args.size() - 1
-            << '\n';
-        return EXIT_FAILURE;
-    }
+int render::Application::run(gsl::span<char const * const> args) {
+  if (args.size() != 4) {
+    std::cerr << "Error: Invalid number of arguments: " << args.size() - 1 << '\n';
+    return EXIT_FAILURE;
+  }
 
-    try {
-        RenderJob job(args[1], args[2], args[3]);
+  try {
+    RenderJob job(args[1], args[2], args[3]);
 
-        auto const start_time = std::chrono::high_resolution_clock::now();
-        render_loop(job);
-        auto const end_time = std::chrono::high_resolution_clock::now();
+    auto const start_time = std::chrono::high_resolution_clock::now();
+    render_loop(job);
+    auto const end_time = std::chrono::high_resolution_clock::now();
 
-        std::chrono::duration<double> const elapsed = end_time - start_time;
-        std::cout << "Tiempo total: " << elapsed.count() << " segundos.\n";
+    std::chrono::duration<double> const elapsed = end_time - start_time;
+    std::cout << "Tiempo total: " << elapsed.count() << " segundos.\n";
 
-        return EXIT_SUCCESS;
-    } catch (std::exception const & e) {
-        std::cerr << "Excepción capturada: " << e.what() << '\n';
-        return EXIT_FAILURE;
-    }
+    job.image.save_ppm(job.output_path);
+    std::cout << "Imagen guardada como " << job.output_path << "\n";
+
+    return EXIT_SUCCESS;
+  } catch (std::exception const & e) {
+    std::cerr << "Excepción: " << e.what() << '\n';
+    return EXIT_FAILURE;
+  }
 }

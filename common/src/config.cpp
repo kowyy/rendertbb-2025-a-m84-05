@@ -137,6 +137,28 @@ namespace render {
       cfg.set_ray_rng_seed(seed);
     }
 
+    void handle_num_threads(std::vector<std::string> const & parts, config & cfg) {
+      if (parts.size() != 2) {
+        throw std::runtime_error("Error: Invalid value for key: [num_threads:]");
+      }
+      int const n = to_int(parts[1]);
+      cfg.set_num_threads(n);
+    }
+
+    void handle_grain_size(std::vector<std::string> const & parts, config & cfg) {
+      if (parts.size() != 2) {
+        throw std::runtime_error("Error: Invalid value for key: [grain_size:]");
+      }
+      cfg.set_grain_size(to_int(parts[1]));
+    }
+
+    void handle_partitioner(std::vector<std::string> const & parts, config & cfg) {
+      if (parts.size() != 2) {
+        throw std::runtime_error("Error: Invalid value for key: [partitioner:]");
+      }
+      cfg.set_partitioner(parts[1]);
+    }
+
     void handle_background_dark_color(std::vector<std::string> const & parts, config & cfg) {
       if (parts.size() != 4) {
         throw std::runtime_error("Error: Invalid value for key: [background_dark_color:]");
@@ -266,6 +288,27 @@ namespace render {
     ray_rng_seed = seed;
   }
 
+  void config::set_num_threads(int const n) {
+    if (n == 0 or n < -1) { 
+      throw std::runtime_error("Error: Invalid value for key: [num_threads:]");
+    }
+    num_threads = n;
+  }
+
+  void config::set_grain_size(int const s) {
+    if (s <= 0) {
+      throw std::runtime_error("Error: Invalid value for key: [grain_size:]");
+    }
+    grain_size = s;
+  }
+
+  void config::set_partitioner(std::string const & p) {
+    if (p != "auto" and p != "simple" and p != "static") {
+      throw std::runtime_error("Error: Invalid value for key: [partitioner:]");
+    }
+    partitioner = p;
+  }
+
   void config::set_background_dark_color(vector const & color) {
     if (color.x < 0.0 or
         color.x > 1.0 or
@@ -307,6 +350,9 @@ namespace render {
       {             "max_depth",              handle_max_depth},
       {     "material_rng_seed",      handle_material_rng_seed},
       {          "ray_rng_seed",           handle_ray_rng_seed},
+      {           "num_threads",            handle_num_threads},
+      {            "grain_size",             handle_grain_size},
+      {           "partitioner",            handle_partitioner},
       { "background_dark_color",  handle_background_dark_color},
       {"background_light_color", handle_background_light_color},
     };
