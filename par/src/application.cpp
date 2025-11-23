@@ -2,22 +2,23 @@
 #include "camera.hpp"
 #include "color.hpp"
 #include "config.hpp"
-#include "image_soa.hpp" 
+#include "image_soa_par.hpp" 
 #include "object.hpp"
 #include "ray.hpp"
 #include "scene.hpp"
 #include "scene_parser.hpp"
 #include "vector.hpp"
 
+#include <oneapi/tbb/enumerable_thread_specific.h>
 #include <oneapi/tbb/partitioner.h>
-#include <tbb/blocked_range.h>
-#include <tbb/enumerable_thread_specific.h>
-#include <tbb/parallel_for.h>
-#include <tbb/global_control.h>
+#include <oneapi/tbb/blocked_range.h>
+#include <oneapi/tbb/parallel_for.h>
+#include <oneapi/tbb/global_control.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <gsl/span>
@@ -75,11 +76,11 @@ namespace {
       ray_seeds.resize(num_seeds);
       material_seeds.resize(num_seeds);
 
-      std::mt19937_64 master_ray_gen{
+      const std::mt19937_64 master_ray_gen{
           static_cast<std::mt19937_64::result_type>(cfg.get_ray_rng_seed())};
       std::ranges::generate(ray_seeds, master_ray_gen);
 
-      std::mt19937_64 master_mat_gen{
+      const std::mt19937_64 master_mat_gen{
           static_cast<std::mt19937_64::result_type>(cfg.get_material_rng_seed())};
       std::ranges::generate(material_seeds, master_mat_gen);
 
@@ -142,7 +143,7 @@ namespace {
         gamma(j->cfg.get_gamma()) {}
 
     void operator()(tbb::blocked_range<int> const & r) const {
-      ThreadLocalRNGs local_rngs{
+      ThreadLocalRNGs const local_rngs{
           &job->ray_rngs.local(),
           &job->material_rngs.local()
       };
@@ -191,7 +192,7 @@ namespace {
     std::cout << "Renderizando escena (" << width << "x" << height 
               << ") con TBB...\n";
 
-    RenderTask task(&job); // Pasamos la dirección de memoria (&job)
+    RenderTask const task(&job); // Pasamos la dirección de memoria (&job)
     
     std::string const part_type = job.cfg.get_partitioner();
     int const grain = job.cfg.get_grain_size();
