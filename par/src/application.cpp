@@ -16,6 +16,7 @@
 #include <oneapi/tbb/global_control.h>
 
 #include <algorithm>
+#include <functional>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -76,13 +77,13 @@ namespace {
       ray_seeds.resize(num_seeds);
       material_seeds.resize(num_seeds);
 
-      const std::mt19937_64 master_ray_gen{
-          static_cast<std::mt19937_64::result_type>(cfg.get_ray_rng_seed())};
-      std::ranges::generate(ray_seeds, master_ray_gen);
+    std::mt19937_64 master_ray_gen{
+        static_cast<std::mt19937_64::result_type>(cfg.get_ray_rng_seed())};
+    std::ranges::generate(ray_seeds, std::ref(master_ray_gen));
 
-      const std::mt19937_64 master_mat_gen{
-          static_cast<std::mt19937_64::result_type>(cfg.get_material_rng_seed())};
-      std::ranges::generate(material_seeds, master_mat_gen);
+    std::mt19937_64 master_mat_gen{
+        static_cast<std::mt19937_64::result_type>(cfg.get_material_rng_seed())};
+    std::ranges::generate(material_seeds, std::ref(master_mat_gen));
 
       ray_rngs = tbb::enumerable_thread_specific<std::mt19937_64>{[this] {
           static std::atomic<size_t> counter{0};
@@ -192,7 +193,7 @@ namespace {
     std::cout << "Renderizando escena (" << width << "x" << height 
               << ") con TBB...\n";
 
-    RenderTask const task(&job); // Pasamos la dirección de memoria (&job)
+    RenderTask const task(&job);
     
     std::string const part_type = job.cfg.get_partitioner();
     int const grain = job.cfg.get_grain_size();

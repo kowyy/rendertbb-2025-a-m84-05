@@ -12,9 +12,10 @@ export LD_LIBRARY_PATH="/opt/gcc-14/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # Directorios y binarios
 TEST_DIR="tests"
 OUTPUT_DIR="out/build/test_outputs"
-BUILD_PRESET="default"
+BUILD_PRESET="clang-tidy"
 AOS_BIN="out/build/$BUILD_PRESET/aos/Release/render-aos"
 SOA_BIN="out/build/$BUILD_PRESET/soa/Release/render-soa"
+PAR_BIN="out/build/$BUILD_PRESET/par/Release/render-par"
 COMPARE_SCRIPT="$(pwd)/scripts/compare_ppm.py"
 
 # Contadores de pruebas
@@ -31,6 +32,11 @@ fi
 
 if [ ! -f "$SOA_BIN" ]; then
     echo "Error: Ejecutable SOA no encontrado: $SOA_BIN"
+    exit 1
+fi
+
+if [ ! -f "$PAR_BIN" ]; then
+    echo "Error: Ejecutable PAR no encontrado: $PAR_BIN"
     exit 1
 fi
 
@@ -152,6 +158,24 @@ check_success_case "SOA (Caso 4)" "$SOA_BIN" \
     "$TEST_DIR/config4.txt" "$TEST_DIR/scene4.txt" \
     "$OUTPUT_DIR/soa_out4.ppm" "$TEST_DIR/s4.ppm"
 
+echo ""
+echo "INFO: ===== Ejecutando Casos de Éxito (PAR) ====="
+check_success_case "PAR (Caso 1)" "$PAR_BIN" \
+    "$TEST_DIR/config1.txt" "$TEST_DIR/scene1.txt" \
+    "$OUTPUT_DIR/par_out1.ppm" "$TEST_DIR/s1.ppm"
+
+check_success_case "PAR (Caso 2)" "$PAR_BIN" \
+    "$TEST_DIR/config2.txt" "$TEST_DIR/scene2.txt" \
+    "$OUTPUT_DIR/par_out2.ppm" "$TEST_DIR/s2.ppm"
+
+check_success_case "PAR (Caso 3)" "$PAR_BIN" \
+    "$TEST_DIR/config3.txt" "$TEST_DIR/scene3.txt" \
+    "$OUTPUT_DIR/par_out3.ppm" "$TEST_DIR/s3.ppm"
+
+check_success_case "PAR (Caso 4)" "$PAR_BIN" \
+    "$TEST_DIR/config4.txt" "$TEST_DIR/scene4.txt" \
+    "$OUTPUT_DIR/par_out4.ppm" "$TEST_DIR/s4.ppm"
+
 # === CASOS DE ERROR ===
 
 echo ""
@@ -228,6 +252,44 @@ check_error_case "SOA (Material no existe)" \
 
 check_error_case "SOA (Radio negativo)" \
     "$SOA_BIN" "$TEST_DIR/config1.txt" "$TEST_DIR/invalid_scene_radius.txt" "$OUTPUT_DIR/error.ppm"
+
+echo ""
+echo "INFO: ===== Errores de Línea de Comandos (PAR) ====="
+check_error_case "PAR (Argumentos insuficientes)" \
+    "$PAR_BIN" "$TEST_DIR/config1.txt" "$TEST_DIR/scene1.txt"
+
+check_error_case "PAR (Argumentos excesivos)" \
+    "$PAR_BIN" "a" "b" "c" "d"
+
+echo ""
+echo "INFO: ===== Errores de Archivos No Encontrados (PAR) ====="
+check_error_case "PAR (Config no existe)" \
+    "$PAR_BIN" "$TEST_DIR/no_existe.txt" "$TEST_DIR/scene1.txt" "$OUTPUT_DIR/error.ppm"
+
+check_error_case "PAR (Escena no existe)" \
+    "$PAR_BIN" "$TEST_DIR/config1.txt" "$TEST_DIR/no_existe.txt" "$OUTPUT_DIR/error.ppm"
+
+echo ""
+echo "INFO: ===== Errores de Configuración Inválida (PAR) ====="
+check_error_case "PAR (Gamma negativo)" \
+    "$PAR_BIN" "$TEST_DIR/invalid_config_gamma.txt" "$TEST_DIR/scene1.txt" "$OUTPUT_DIR/error.ppm"
+
+check_error_case "PAR (FOV >= 180)" \
+    "$PAR_BIN" "$TEST_DIR/invalid_config_fov.txt" "$TEST_DIR/scene1.txt" "$OUTPUT_DIR/error.ppm"
+
+check_error_case "PAR (Image width cero)" \
+    "$PAR_BIN" "$TEST_DIR/invalid_config_width.txt" "$TEST_DIR/scene1.txt" "$OUTPUT_DIR/error.ppm"
+
+echo ""
+echo "INFO: ===== Errores de Escena Inválida (PAR) ====="
+check_error_case "PAR (Material no existe)" \
+    "$PAR_BIN" "$TEST_DIR/config1.txt" "$TEST_DIR/invalid_scene_material.txt" "$OUTPUT_DIR/error.ppm"
+
+check_error_case "PAR (Sintaxis incorrecta)" \
+    "$PAR_BIN" "$TEST_DIR/config1.txt" "$TEST_DIR/invalid_scene_syntax.txt" "$OUTPUT_DIR/error.ppm"
+
+check_error_case "PAR (Radio negativo)" \
+    "$PAR_BIN" "$TEST_DIR/config1.txt" "$TEST_DIR/invalid_scene_radius.txt" "$OUTPUT_DIR/error.ppm"
 
 # === RESUMEN FINAL ===
 

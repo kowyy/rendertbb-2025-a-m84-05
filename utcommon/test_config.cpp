@@ -546,4 +546,178 @@ namespace render {
     EXPECT_DOUBLE_EQ(light.z, 1.0);
   }
 
+  // Tests para nuevos parámetros TBB
+
+  // Pruebas de valores por defecto para parámetros TBB
+  TEST(ConfigDefaultTest, NumThreads) {
+    config const cfg;
+    EXPECT_EQ(cfg.get_num_threads(), -1);
+  }
+
+  TEST(ConfigDefaultTest, GrainSize) {
+    config const cfg;
+    EXPECT_EQ(cfg.get_grain_size(), 1);
+  }
+
+  TEST(ConfigDefaultTest, Partitioner) {
+    config const cfg;
+    EXPECT_EQ(cfg.get_partitioner(), "auto");
+  }
+
+  // Pruebas de carga desde archivo para parámetros TBB
+  TEST(ConfigLoadTest, NumThreadsAuto) {
+    TempConfigFile const temp_file("num_threads: -1\n");
+    config cfg;
+    ASSERT_NO_THROW(load_config(temp_file.get_filename(), cfg));
+    EXPECT_EQ(cfg.get_num_threads(), -1);
+  }
+
+  TEST(ConfigLoadTest, NumThreadsSpecific) {
+    TempConfigFile const temp_file("num_threads: 8\n");
+    config cfg;
+    ASSERT_NO_THROW(load_config(temp_file.get_filename(), cfg));
+    EXPECT_EQ(cfg.get_num_threads(), 8);
+  }
+
+  TEST(ConfigLoadTest, GrainSize) {
+    TempConfigFile const temp_file("grain_size: 50\n");
+    config cfg;
+    ASSERT_NO_THROW(load_config(temp_file.get_filename(), cfg));
+    EXPECT_EQ(cfg.get_grain_size(), 50);
+  }
+
+  TEST(ConfigLoadTest, PartitionerAuto) {
+    TempConfigFile const temp_file("partitioner: auto\n");
+    config cfg;
+    ASSERT_NO_THROW(load_config(temp_file.get_filename(), cfg));
+    EXPECT_EQ(cfg.get_partitioner(), "auto");
+  }
+
+  TEST(ConfigLoadTest, PartitionerSimple) {
+    TempConfigFile const temp_file("partitioner: simple\n");
+    config cfg;
+    ASSERT_NO_THROW(load_config(temp_file.get_filename(), cfg));
+    EXPECT_EQ(cfg.get_partitioner(), "simple");
+  }
+
+  TEST(ConfigLoadTest, PartitionerStatic) {
+    TempConfigFile const temp_file("partitioner: static\n");
+    config cfg;
+    ASSERT_NO_THROW(load_config(temp_file.get_filename(), cfg));
+    EXPECT_EQ(cfg.get_partitioner(), "static");
+  }
+
+  // Pruebas de validación para parámetros TBB
+  TEST(ConfigValidationTest, NumThreadsZero) {
+    TempConfigFile const temp_file("num_threads: 0\n");
+    config cfg;
+    EXPECT_THROW(load_config(temp_file.get_filename(), cfg), std::runtime_error);
+  }
+
+  TEST(ConfigValidationTest, NumThreadsInvalidNegative) {
+    TempConfigFile const temp_file("num_threads: -5\n");
+    config cfg;
+    EXPECT_THROW(load_config(temp_file.get_filename(), cfg), std::runtime_error);
+  }
+
+  TEST(ConfigValidationTest, GrainSizeZero) {
+    TempConfigFile const temp_file("grain_size: 0\n");
+    config cfg;
+    EXPECT_THROW(load_config(temp_file.get_filename(), cfg), std::runtime_error);
+  }
+
+  TEST(ConfigValidationTest, GrainSizeNegative) {
+    TempConfigFile const temp_file("grain_size: -10\n");
+    config cfg;
+    EXPECT_THROW(load_config(temp_file.get_filename(), cfg), std::runtime_error);
+  }
+
+  TEST(ConfigValidationTest, PartitionerInvalid) {
+    TempConfigFile const temp_file("partitioner: dynamic\n");
+    config cfg;
+    EXPECT_THROW(load_config(temp_file.get_filename(), cfg), std::runtime_error);
+  }
+
+  TEST(ConfigValidationTest, PartitionerInvalidRandom) {
+    TempConfigFile const temp_file("partitioner: random_string\n");
+    config cfg;
+    EXPECT_THROW(load_config(temp_file.get_filename(), cfg), std::runtime_error);
+  }
+
+  // Prueba de parsing para parámetros TBB
+  TEST(ConfigParsingTest, NumThreadsNoArgs) {
+    TempConfigFile const temp_file("num_threads:\n");
+    config cfg;
+    EXPECT_THROW(load_config(temp_file.get_filename(), cfg), std::runtime_error);
+  }
+
+  TEST(ConfigParsingTest, GrainSizeNoArgs) {
+    TempConfigFile const temp_file("grain_size:\n");
+    config cfg;
+    EXPECT_THROW(load_config(temp_file.get_filename(), cfg), std::runtime_error);
+  }
+
+  TEST(ConfigParsingTest, PartitionerNoArgs) {
+    TempConfigFile const temp_file("partitioner:\n");
+    config cfg;
+    EXPECT_THROW(load_config(temp_file.get_filename(), cfg), std::runtime_error);
+  }
+
+  // Pruebas de casos límite para parámetros TBB
+  TEST(ConfigEdgeCaseTest, NumThreadsMaximum) {
+    TempConfigFile const temp_file("num_threads: 256\n");
+    config cfg;
+    ASSERT_NO_THROW(load_config(temp_file.get_filename(), cfg));
+    EXPECT_EQ(cfg.get_num_threads(), 256);
+  }
+
+  TEST(ConfigEdgeCaseTest, GrainSizeMinimum) {
+    TempConfigFile const temp_file("grain_size: 1\n");
+    config cfg;
+    ASSERT_NO_THROW(load_config(temp_file.get_filename(), cfg));
+    EXPECT_EQ(cfg.get_grain_size(), 1);
+  }
+
+  TEST(ConfigEdgeCaseTest, GrainSizeLarge) {
+    TempConfigFile const temp_file("grain_size: 1000\n");
+    config cfg;
+    ASSERT_NO_THROW(load_config(temp_file.get_filename(), cfg));
+    EXPECT_EQ(cfg.get_grain_size(), 1'000);
+  }
+
+  // Prueba de configuración completa incluyendo parámetros TBB
+  TEST(ConfigLoadTest, AllParametersWithTBB) {
+    TempConfigFile const temp_file("aspect_ratio: 21 9\n"
+                                   "image_width: 2560\n"
+                                   "gamma: 1.8\n"
+                                   "camera_position: 5.0 10.0 15.0\n"
+                                   "camera_target: 1.0 2.0 3.0\n"
+                                   "camera_north: 0.0 1.0 0.0\n"
+                                   "field_of_view: 75.0\n"
+                                   "samples_per_pixel: 200\n"
+                                   "max_depth: 15\n"
+                                   "material_rng_seed: 123\n"
+                                   "ray_rng_seed: 456\n"
+                                   "num_threads: 16\n"
+                                   "grain_size: 10\n"
+                                   "partitioner: static\n"
+                                   "background_dark_color: 0.2 0.4 0.6\n"
+                                   "background_light_color: 0.8 0.9 1.0\n");
+
+    config cfg;
+    ASSERT_NO_THROW(load_config(temp_file.get_filename(), cfg));
+    EXPECT_EQ(cfg.get_aspect_width(), 21);
+    EXPECT_EQ(cfg.get_aspect_height(), 9);
+    EXPECT_EQ(cfg.get_image_width(), 2'560);
+    EXPECT_DOUBLE_EQ(cfg.get_gamma(), 1.8);
+    EXPECT_DOUBLE_EQ(cfg.get_field_of_view(), 75.0);
+    EXPECT_EQ(cfg.get_samples_per_pixel(), 200);
+    EXPECT_EQ(cfg.get_max_depth(), 15);
+    EXPECT_EQ(cfg.get_material_rng_seed(), 123);
+    EXPECT_EQ(cfg.get_ray_rng_seed(), 456);
+    EXPECT_EQ(cfg.get_num_threads(), 16);
+    EXPECT_EQ(cfg.get_grain_size(), 10);
+    EXPECT_EQ(cfg.get_partitioner(), "static");
+  }
+
 }  // namespace render
